@@ -70,6 +70,11 @@
 			<version>${log4j.version}</version>
 			<scope>runtime</scope>
 		</dependency>
+		<dependency>
+			<groupId>org.apache.flink</groupId>
+			<artifactId>flink-connector-kafka</artifactId>
+			<version>3.4.0-1.20</version>
+		</dependency>
 	</dependencies>
 
 	<build>
