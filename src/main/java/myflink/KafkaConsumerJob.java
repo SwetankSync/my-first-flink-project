@@ -8,9 +8,16 @@ import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.serialization.SimpleStringSchema;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
+import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
+import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer;
+import org.apache.flink.util.Collector;
 import org.bson.Document;
 import redis.clients.jedis.Jedis;
 
@@ -76,8 +83,56 @@ public class KafkaConsumerJob {
             return node.toString();
         });
 
+        // Apply a tumbling window of 1 minute
+        DataStream<String> windowedStream = modifiedStream
+                .keyBy(value -> {
+                    ObjectMapper mapper = new ObjectMapper();
+                    ObjectNode node = (ObjectNode) mapper.readTree(value);
+                    return node.get("id").asInt();
+                })
+                .window(TumblingEventTimeWindows.of(Time.minutes(1)))
+                .reduce((value1, value2) -> {
+                    // Combine values
+                    ObjectMapper mapper = new ObjectMapper();
+                    ObjectNode node1 = (ObjectNode) mapper.readTree(value1);
+                    ObjectNode node2 = (ObjectNode) mapper.readTree(value2);
+                    node1.put("name", node1.get("name").asText() + ", " + node2.get("name").asText());
+                    return node1.toString();
+                });
+
+        // Add state management
+        DataStream<String> statefulStream = windowedStream
+                .keyBy(value -> {
+                    ObjectMapper mapper = new ObjectMapper();
+                    ObjectNode node = (ObjectNode) mapper.readTree(value);
+                    return node.get("id").asInt();
+                })
+                .process(new KeyedProcessFunction<Integer, String, String>() {
+
+                    private transient ValueState<String> state;
+
+                    @Override
+                    public void open(Configuration parameters) throws Exception {
+                        ValueStateDescriptor<String> descriptor = new ValueStateDescriptor<>(
+                                "state", String.class);
+                        state = getRuntimeContext().getState(descriptor);
+                    }
+
+                    @Override
+                    public void processElement(String value, Context ctx, Collector<String> out) throws Exception {
+                        String currentState = state.value();
+                        if (currentState == null) {
+                            currentState = value;
+                        } else {
+                            currentState += ", " + value;
+                        }
+                        state.update(currentState);
+                        out.collect(currentState);
+                    }
+                });
+
         // Print the modified data
-        modifiedStream.print().name("Print to Console");
+        statefulStream.print().name("Print to Console");
 
         // Execute the Flink job
         env.execute("Kafka Consumer Job");
