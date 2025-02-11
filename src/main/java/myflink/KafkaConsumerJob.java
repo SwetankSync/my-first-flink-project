@@ -12,6 +12,7 @@ import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer;
 import org.bson.Document;
+import redis.clients.jedis.Jedis;
 
 import java.util.Properties;
 
@@ -48,6 +49,15 @@ public class KafkaConsumerJob {
             ObjectMapper mapper = new ObjectMapper();
             ObjectNode node = (ObjectNode) mapper.readTree(jsonString);
             node.put("name", "Modified: " + node.get("name").asText());
+
+            // Store data in Redis cache
+            try (Jedis jedis = new Jedis("localhost", 6379)) {
+                String cacheKey = "commodity:" + node.get("id").asInt();
+                jedis.set(cacheKey, node.toString());
+                jedis.expire(cacheKey, 3600); // Set expiration time to 1 hour
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
 
             // Store data in MongoDB
             try (MongoClient mongoClient = MongoClients.create("mongodb://localhost:27017")) {
